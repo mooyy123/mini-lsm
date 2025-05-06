@@ -21,11 +21,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
-use anyhow::Result;
-use bytes::Bytes;
-use nom::AsBytes;
-use parking_lot::{Mutex, MutexGuard, RwLock};
-
 use crate::block::Block;
 use crate::compact::{
     CompactionController, CompactionOptions, LeveledCompactionController, LeveledCompactionOptions,
@@ -36,6 +31,11 @@ use crate::manifest::Manifest;
 use crate::mem_table::MemTable;
 use crate::mvcc::LsmMvccInner;
 use crate::table::SsTable;
+use anyhow::Result;
+use bytes::Bytes;
+use nom::AsBytes;
+use parking_lot::{Mutex, MutexGuard, RwLock};
+use std::option::Option;
 
 pub type BlockCache = moka::sync::Cache<(usize, usize), Arc<Block>>;
 
@@ -299,7 +299,20 @@ impl LsmStorageInner {
 
     /// Get a key from the storage. In day 7, this can be further optimized by using a bloom filter.
     pub fn get(&self, _key: &[u8]) -> Result<Option<Bytes>> {
-        unimplemented!()
+        let state = self.state.read();
+        {
+            let ret = state.memtable.get(_key);
+            if !ret.is_none() {
+                return Ok(ret);
+            }
+        }
+        for imm_memtable in state.imm_memtables.iter().rev() {
+            let ret = imm_memtable.get(_key);
+            if !ret.is_none() {
+                return Ok(ret);
+            }
+        }
+        Ok(None)
     }
 
     /// Write a batch of data into the storage. Implement in week 2 day 7.
@@ -311,12 +324,16 @@ impl LsmStorageInner {
     pub fn put(&self, _key: &[u8], _value: &[u8]) -> Result<()> {
         let _guard = self.state_lock.lock();
         let state = self.state.read();
-        state.memtable.put(_key,_value)
+        let ret = state.memtable.put(_key, _value);
+        if state.memtable.approximate_size() >= self.options.block_size {
+            self.force_freeze_memtable(&_guard)?;
+        }
+        ret
     }
 
     /// Remove a key from the storage by writing an empty value.
     pub fn delete(&self, _key: &[u8]) -> Result<()> {
-       self.put(_key,Bytes::new().as_bytes())
+        self.put(_key, Bytes::new().as_bytes())
     }
 
     pub(crate) fn path_of_sst_static(path: impl AsRef<Path>, id: usize) -> PathBuf {
@@ -341,7 +358,16 @@ impl LsmStorageInner {
 
     /// Force freeze the current memtable to an immutable memtable
     pub fn force_freeze_memtable(&self, _state_lock_observer: &MutexGuard<'_, ()>) -> Result<()> {
-        unimplemented!()
+        let new_memtable = MemTable::create(self.next_sst_id());
+        {
+            // 首先获取 RwLock 的写锁
+            let mut state = self.state.write();
+            let mut snapshot = state.as_ref().clone();
+            let old_memtable = std::mem::replace(&mut snapshot.memtable, Arc::new(new_memtable));
+            snapshot.imm_memtables.push(old_memtable.clone());
+            *state = Arc::new(snapshot);
+        }
+        Ok(())
     }
 
     /// Force flush the earliest-created immutable memtable to disk

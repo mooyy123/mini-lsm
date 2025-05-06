@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// #![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-// #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
+#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
+#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
 use std::ops::Bound;
 use std::path::Path;
@@ -102,10 +102,13 @@ impl MemTable {
     /// In week 2, day 6, also flush the data to WAL.
     /// In week 3, day 5, modify the function to use the batch API.
     pub fn put(&self, _key: &[u8], _value: &[u8]) -> Result<()> {
-        self.map.insert(
-            Bytes::copy_from_slice(_key).clone(),
-            Bytes::copy_from_slice(_value).clone(),
+        let key = Bytes::copy_from_slice(_key);
+        let value = Bytes::copy_from_slice(_value);
+        self.approximate_size.fetch_add(
+            key.len() + value.len(),
+            std::sync::atomic::Ordering::Relaxed,
         );
+        self.map.insert(key, value);
         Ok(())
     }
 
