@@ -328,13 +328,19 @@ impl LsmStorageInner {
 
     /// Put a key-value pair into the storage by writing into the current memtable.
     pub fn put(&self, _key: &[u8], _value: &[u8]) -> Result<()> {
-        let state = self.state.read();
-        let ret = state.memtable.put(_key, _value);
-        if state.memtable.approximate_size() >= self.options.block_size {
+        let need_freeze;
+        {
+            let state = self.state.read();
+            let ret = state.memtable.put(_key, _value);
+            println!("size {:?}", state.memtable.approximate_size());
+            need_freeze = state.memtable.approximate_size() >= self.options.target_sst_size;
+        }
+        if need_freeze {
+            println!("need_freeze");
             let _guard = self.state_lock.lock();
             self.force_freeze_memtable(&_guard)?;
         }
-        ret
+        Ok(())
     }
 
     /// Remove a key from the storage by writing an empty value.
@@ -364,10 +370,10 @@ impl LsmStorageInner {
 
     /// Force freeze the current memtable to an immutable memtable
     pub fn force_freeze_memtable(&self, _state_lock_observer: &MutexGuard<'_, ()>) -> Result<()> {
-        let new_memtable = MemTable::create(self.next_sst_id());
         {
             // 首先获取 RwLock 的写锁
             let mut state = self.state.write();
+            let new_memtable = MemTable::create(self.next_sst_id());
             let mut snapshot = state.as_ref().clone();
             let old_memtable = std::mem::replace(&mut snapshot.memtable, Arc::new(new_memtable));
             snapshot.imm_memtables.insert(0, old_memtable.clone());
