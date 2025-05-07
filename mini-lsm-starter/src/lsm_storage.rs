@@ -299,19 +299,25 @@ impl LsmStorageInner {
 
     /// Get a key from the storage. In day 7, this can be further optimized by using a bloom filter.
     pub fn get(&self, _key: &[u8]) -> Result<Option<Bytes>> {
+        // 获取当前状态的快照
         let state = self.state.read();
-        {
-            let ret = state.memtable.get(_key);
-            if !ret.is_none() {
-                return Ok(ret);
+        // 检查当前 memtable
+        if let Some(value) = state.memtable.get(_key) {
+            if value.is_empty() {
+                return Ok(None);
+            }
+            return Ok(Some(value.clone()));
+        }
+        // 检查 immutable memtables
+        for memtable in &state.imm_memtables {
+            if let Some(value) = memtable.get(_key) {
+                if value.is_empty() {
+                    return Ok(None);
+                }
+                return Ok(Some(value.clone()));
             }
         }
-        for imm_memtable in state.imm_memtables.iter().rev() {
-            let ret = imm_memtable.get(_key);
-            if !ret.is_none() {
-                return Ok(ret);
-            }
-        }
+
         Ok(None)
     }
 
@@ -322,10 +328,10 @@ impl LsmStorageInner {
 
     /// Put a key-value pair into the storage by writing into the current memtable.
     pub fn put(&self, _key: &[u8], _value: &[u8]) -> Result<()> {
-        let _guard = self.state_lock.lock();
         let state = self.state.read();
         let ret = state.memtable.put(_key, _value);
         if state.memtable.approximate_size() >= self.options.block_size {
+            let _guard = self.state_lock.lock();
             self.force_freeze_memtable(&_guard)?;
         }
         ret
@@ -364,7 +370,7 @@ impl LsmStorageInner {
             let mut state = self.state.write();
             let mut snapshot = state.as_ref().clone();
             let old_memtable = std::mem::replace(&mut snapshot.memtable, Arc::new(new_memtable));
-            snapshot.imm_memtables.push(old_memtable.clone());
+            snapshot.imm_memtables.insert(0, old_memtable.clone());
             *state = Arc::new(snapshot);
         }
         Ok(())
