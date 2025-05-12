@@ -172,18 +172,32 @@ impl StorageIterator for MemTableIterator {
     type KeyType<'a> = KeySlice<'a>;
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        self.borrow_item().1.as_ref()
     }
 
     fn key(&self) -> KeySlice {
-        unimplemented!()
+       self.borrow_item().0.as_ref().into()
     }
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        self.borrow_item().0.is_empty() && self.borrow_item().1.is_empty()
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        // 使用自引用的 with_mut 方法来修改内部数据
+        self.with_mut(|fields| {
+            // 尝试获取迭代器的下一项
+            if let Some(entry) = fields.iter.next() {
+                // 更新当前项为新的键值对
+                fields.item = (entry.key().clone(), entry.value().clone());
+                Ok(())
+            } else {
+                // 如果没有下一项，设置一个无效状态
+                // 通常可以将 item 设置为某个特殊值来表示迭代结束
+                // 这里我假设空字节表示无效状态，实际使用中可能需要其他方式
+                fields.item = (Bytes::new(), Bytes::new());
+                Ok(())
+            }
+        })
     }
 }
